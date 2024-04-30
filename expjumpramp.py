@@ -24,6 +24,7 @@ class ExperimentalJumpRampStep(Step):
         use = boolean(default=False) # Use regular pipeline by default
         nproc = integer(default=4) # Number of processes to use
         noise_scale = float(default=1) #Scale factor for noise estimate
+        nan_dnu = boolean(default=True) #Set do not use pixels to NaN?
     """
 
     def process(self, input):
@@ -47,8 +48,15 @@ class ExperimentalJumpRampStep(Step):
             # Run the jump detection and ramp fitting
             ramp_results = self.produce_ramp_images(input_model, self.noise_scale)
 
+            # Update DQ arrays with jumps
+            input_model = self.update_groupdq(input_model, ramp_results['flagged_diffs'])
+
             # Convert DQ arrays to 3D
             dq_ints = self.create_dq_ints(input_model)
+
+            # Want to set do not use pixels to NaN
+            if self.nan_dnu:
+                ramp_results = self.set_dnu_to_nan(ramp_results, dq_ints)
 
             # Define integration info
             integ_info = (ramp_results['sci'],
@@ -261,6 +269,48 @@ class ExperimentalJumpRampStep(Step):
 
         return subref
 
+    def update_groupdq(self, datamodel, flagged_diffs):
+        """ Update group DQ based on detected jumps
+    
+        Parameters
+        ----------
+        datamodel : JWST datamodel
+            JWST ramp datamodel
+        flagged_diffs : ndarray
+            Flagged array of size the same as differenced frames, with jumps marked. 
+
+        Returns
+        -------
+        updated_datamodel : JWST datamodel
+            JWST ramp datamodel with updated groupdq
+ 
+        """
+
+        # Create array to hold the jump information and define jump flag
+        dq_grp = datamodel.groupdq.copy()
+        jump = dqflags.pixel['JUMP_DET']
+
+        # Loop over each integration and create jump array
+        for int_i, integ in enumerate(flagged_diffs):
+            for i, diff in enumerate(integ):
+                # Locate the jumps in the differenced frames, Tim's code sets to 0. 
+                jump_check = np.where(diff == 0)
+  
+                # If jump is in differenced frame N, then flag as a jump in real frames N and N+1
+                this_dq_n = dq_grp[int_i, i]
+                this_dq_np1 = dq_grp[int_i, i+1]
+                
+                this_dq_n[jump_check] = np.bitwise_or(this_dq_n[jump_check], jump)
+                this_dq_np1[jump_check] = np.bitwise_or(this_dq_np1[jump_check], jump)
+
+                dq_grp[int_i, i] = this_dq_n
+                dq_grp[int_i, i+1] = this_dq_np1
+
+        # Apply jump array to groupdq
+        datamodel.groupdq = dq_grp
+
+        return datamodel
+
     def create_dq_ints(self, datamodel):
         """ Turn the 2D and 4D pixel DQ to 3D DQ 
 
@@ -291,7 +341,7 @@ class ExperimentalJumpRampStep(Step):
         int_s = datamodel.meta.exposure.integration_start
         int_e = datamodel.meta.exposure.integration_end
         nints = (int_e - int_s) + 1
-        dq_ints = np.empty([nints, nrows, ncols]) 
+        dq_ints = np.empty([nints, nrows, ncols], dtype=np.uint32) 
 
         # Loop over integrations
         for int_i in range(nints):
@@ -317,6 +367,38 @@ class ExperimentalJumpRampStep(Step):
             dq_ints[int_i] = dq_pix
 
         return dq_ints
+
+    def set_dnu_to_nan(self, ramp_results, dq_ints):
+        ''' Set any do not use pixels to NaNs
+
+        Parameters
+        ----------
+        results : dict
+            Dictionary containing equivalents of the integration level 'SCI', 'ERR', 
+            'VAR_POISSON', and 'VAR_RDNOISE' arrays. 
+        dq_ints : ndarray
+            3D data quality array
+
+        Returns
+        -------
+        results : dict
+            Dictionary containing equivalents of the integration level 'SCI', 'ERR', 
+            'VAR_POISSON', and 'VAR_RDNOISE' arrays. 
+
+        '''
+
+        # Define do not use pixel check
+        dnu = dqflags.pixel['DO_NOT_USE']
+        dnu_loc = np.bitwise_and(dq_ints, dnu)
+        dnu_check = np.where(dnu_loc > 0)
+
+        # Assign NaNs to arrays
+        ramp_results['sci'][dnu_check] = np.nan 
+        ramp_results['var_poisson'][dnu_check] = np.nan 
+        ramp_results['var_rdnoise'][dnu_check] = np.nan 
+        ramp_results['err'][dnu_check] = np.nan 
+
+        return ramp_results
 
     def weighted_average(self, sci, var_poisson, var_rdnoise, err):
         ''' Compute a weighted average of a 3D multi-integration dataset
