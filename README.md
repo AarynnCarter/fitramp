@@ -24,7 +24,7 @@ if __name__ == '__main__':
   # Call the step
   rate, rateints = expjumpramp.ExperimentalJumpRampStep.call(my_jwst_data, 
                                                  save_results=False,
-                                                 nproc=steps['exp_jumpramp']['nproc'])
+                                                 nproc=4)
 
   # Save the outputs
   rateints.save("expjumpramp_rateints.fits, dir_path="/my_save_dir/")
