@@ -386,9 +386,14 @@ class ExperimentalJumpRampStep(Step):
         # Define array to save values to
         ncols = datamodel.meta.subarray.xsize
         nrows = datamodel.meta.subarray.ysize
-        int_s = datamodel.meta.exposure.integration_start
-        int_e = datamodel.meta.exposure.integration_end
-        nints = (int_e - int_s) + 1
+        if '-seg' in datamodel.meta.filename:
+            # This is a multi-segment dataset
+            int_s = datamodel.meta.exposure.integration_start
+            int_e = datamodel.meta.exposure.integration_end
+            nints = (int_e - int_s) + 1
+        else:
+            # This is a single file dataset
+            nints = datamodel.meta.exposure.nints
         dq_ints = np.empty([nints, nrows, ncols], dtype=np.uint32) 
 
         # Loop over integrations
