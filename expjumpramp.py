@@ -127,9 +127,15 @@ class ExperimentalJumpRampStep(Step):
         # Get some values
         ncols = datamodel.meta.subarray.xsize
         nrows = datamodel.meta.subarray.ysize
-        int_s = datamodel.meta.exposure.integration_start
-        int_e = datamodel.meta.exposure.integration_end
-        nints = (int_e - int_s) + 1
+
+        if '-seg' in datamodel.meta.filename:
+            # This is a multi-segment dataset
+            int_s = datamodel.meta.exposure.integration_start
+            int_e = datamodel.meta.exposure.integration_end
+            nints = (int_e - int_s) + 1
+        else:
+            # This is a single file dataset
+            nints = datamodel.meta.exposure.nints
 
         # Define arrays to save the results to
         rate_ints = np.empty([nints, nrows, ncols])
@@ -138,7 +144,7 @@ class ExperimentalJumpRampStep(Step):
         var_rd_ints = np.empty([nints, nrows, ncols])
 
         # Define array to flag which diff frames to use
-        all_diffs2use = np.ones(diffs.shape, np.uint8)
+        all_diffs2use = self.create_alldiffs2use(datamodel, diffs.shape)
 
         # Loop over each integration, run one ramp at a time
         for int_i in range(nints):
@@ -269,6 +275,48 @@ class ExperimentalJumpRampStep(Step):
 
         return subref
 
+    def create_alldiffs2use(self, datamodel, shape):
+        """
+
+        Parameters
+        ----------
+        datamodel : JWST datamodel
+            JWST ramp datamodel
+        shape : list
+            Shape of the corresponding diffs array
+    
+        Returns
+        -------
+        all_diffs2use : ndarray
+            Array flagging which diffs should be used in the jump detection and ramp fitting
+
+        """ 
+
+        # Make initial diffs2use
+        all_diffs2use = np.ones(shape, dtype=np.uint8)
+
+        # Want to preflag any do not use pixels
+        dnu = dqflags.pixel['DO_NOT_USE']
+        
+        grp_dq = datamodel.groupdq.copy()     # Don't adjust actual groupdq
+        dnu_loc = np.bitwise_and(grp_dq, dnu) # Locations of do not use pixels per group
+        dnu_mask = np.where(dnu_loc > 0)
+        good_mask = np.where(dnu_loc == 0)
+
+        grp_dq[dnu_mask] = 0 # These are bad
+        grp_dq[good_mask] = 1 # These are good
+
+        # Add rather than subtract diffs
+        dq_diffs = grp_dq[:,1:,:,:]+grp_dq[:,:-1,:,:]
+
+        # By adding, any diffs with a value <2 have at least one DNU pixel, so shouldn't be used. 
+        diff_mask = np.where(dq_diffs < 2)
+
+        # Set the diff mask diffs to zero so that aren't used. 
+        all_diffs2use[diff_mask] = 0
+
+        return all_diffs2use
+                
     def update_groupdq(self, datamodel, flagged_diffs):
         """ Update group DQ based on detected jumps
     
